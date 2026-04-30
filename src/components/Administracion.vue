@@ -38,35 +38,31 @@ onAuthStateChanged(auth, (user) => {
   usuarioActual.value = user
 
   if (esAdmin.value) {
+    if (!cancelarLecturaRecordatorios) {
+      const consulta = query(coleccionRecordatorios)
+
+      cancelarLecturaRecordatorios = onSnapshot(consulta, (snapshot) => {
+        recordatorios.value = snapshot.docs.map((recordatorio) => normalizarRecordatorio(recordatorio))
+        ordenarRecordatorios()
+      }, (error) => {
+        console.error('No se pudieron leer los recordatorios', error)
+      })
+    }
+  } else {
     if (cancelarLecturaRecordatorios) {
-      return
+      cancelarLecturaRecordatorios()
+      cancelarLecturaRecordatorios = null
     }
 
-    const consulta = query(coleccionRecordatorios)
-
-    cancelarLecturaRecordatorios = onSnapshot(consulta, (snapshot) => {
-      recordatorios.value = snapshot.docs.map((documento) => normalizarRecordatorio(documento))
-      ordenarRecordatorios()
-    }, (error) => {
-      console.error('No se pudieron leer los recordatorios', error)
-    })
-
-    return
+    recordatorios.value = []
   }
-
-  if (cancelarLecturaRecordatorios) {
-    cancelarLecturaRecordatorios()
-    cancelarLecturaRecordatorios = null
-  }
-
-  recordatorios.value = []
 })
 
-function normalizarRecordatorio(documento) {
-  const datos = documento.data()
+function normalizarRecordatorio(recordatorio) {
+  const datos = recordatorio.data()
 
   return {
-    id: documento.id,
+    id: recordatorio.id,
     texto: datos.texto || '',
     prioridad: prioridades.includes(datos.prioridad) ? datos.prioridad : 'Normal',
     creadoEn: Number(datos.creadoEn) || Date.now(),
@@ -100,24 +96,22 @@ function pendientes() {
 async function anadirRecordatorio() {
   const textoLimpio = texto.value.trim()
 
-  if (!textoLimpio || !usuarioActual.value) {
-    return
-  }
+  if (textoLimpio && usuarioActual.value) {
+    const nuevoRecordatorio = {
+      texto: textoLimpio,
+      prioridad: 'Normal',
+      creadoEn: Date.now(),
+      completado: false,
+      usuarioId: usuarioActual.value.uid,
+      usuarioEmail: usuarioActual.value.email || ''
+    }
 
-  const nuevoRecordatorio = {
-    texto: textoLimpio,
-    prioridad: 'Normal',
-    creadoEn: Date.now(),
-    completado: false,
-    usuarioId: usuarioActual.value.uid,
-    usuarioEmail: usuarioActual.value.email || ''
-  }
-
-  try {
-    await addDoc(coleccionRecordatorios, nuevoRecordatorio)
-    texto.value = ''
-  } catch (error) {
-    console.error('No se pudo crear el recordatorio', error)
+    try {
+      await addDoc(coleccionRecordatorios, nuevoRecordatorio)
+      texto.value = ''
+    } catch (error) {
+      console.error('No se pudo crear el recordatorio', error)
+    }
   }
 }
 

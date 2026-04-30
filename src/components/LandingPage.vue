@@ -4,6 +4,7 @@ import {
   getAuth,
   GoogleAuthProvider,
   onAuthStateChanged,
+  sendPasswordResetEmail,
   signInWithEmailAndPassword,
   GithubAuthProvider,
   signInWithPopup
@@ -23,6 +24,8 @@ const email = ref('')
 const esAdmin = ref(false);
 const logueado = ref(false)
 const password = ref('')
+const mensajeReset = ref('')
+const errorReset = ref('')
 
 onAuthStateChanged(auth, (user) => {
   if (user) {
@@ -83,6 +86,25 @@ function iniciaSesionGithub() {
     })
   }
 }
+
+function resetearPassword() {
+  const emailLimpio = email.value.trim()
+  mensajeReset.value = ''
+  errorReset.value = ''
+
+  if (!emailLimpio) {
+    errorReset.value = 'Escribe tu email para enviarte el enlace de recuperacion.'
+  } else {
+    sendPasswordResetEmail(auth, emailLimpio)
+      .then(() => {
+        mensajeReset.value = 'Te hemos enviado un correo para cambiar la contrasena.'
+      })
+      .catch((error) => {
+        console.error('No se pudo enviar el correo de recuperacion', error)
+        errorReset.value = 'No se pudo enviar el correo de recuperacion.'
+      })
+  }
+}
 </script>
 
 <template>
@@ -128,7 +150,11 @@ function iniciaSesionGithub() {
             </button>
           </div>
 
-          <a class="enlace-recuperar" href="#">¿Has olvidado tu contraseña?</a>
+          <button class="enlace-recuperar" type="button" @click="resetearPassword">
+            ¿Has olvidado tu contraseña?
+          </button>
+          <p v-if="mensajeReset" class="mensaje-reset correcto">{{ mensajeReset }}</p>
+          <p v-if="errorReset" class="mensaje-reset error">{{ errorReset }}</p>
         </form>
 
         <button class="btn-google" type="button" @click="iniciaSesionGoogle">
@@ -300,15 +326,35 @@ label {
 .enlace-recuperar {
   display: inline-flex;
   align-self: flex-start;
+  border: 0;
   margin-top: 8px;
+  padding: 0;
+  background: transparent;
   color: #93c5fd;
   font-size: 13px;
   font-weight: 700;
+  font-family: inherit;
   text-decoration: none;
+  cursor: pointer;
 }
 
 .enlace-recuperar:hover {
   text-decoration: underline;
+}
+
+.mensaje-reset {
+  margin: 4px 0 0;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.mensaje-reset.correcto {
+  color: #7dd3fc;
+}
+
+.mensaje-reset.error {
+  color: #fca5a5;
 }
 
 .btn-google {

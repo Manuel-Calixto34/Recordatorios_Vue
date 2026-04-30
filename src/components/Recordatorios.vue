@@ -1,7 +1,7 @@
 <script setup>
 import { onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import supabaseStorage from './supabaseStorage.vue'
+import { supabase } from '@/supabase'
 import {
   addDoc,
   collection,
@@ -31,6 +31,7 @@ const auth = getAuth()
 const texto = ref('')
 const recordatorios = ref([])
 const editandoId = ref(null)
+const inputArchivos = ref(null)
 const esAdmin = ref(false)
 const textoEditado = ref('')
 const usuarioActual = ref(null)
@@ -40,52 +41,67 @@ const logueado = ref(false)
 const nombreUsuario = ref('')
 const imgUsuario = ref('')
 const idUsuario = ref('')
+const archivo = ref(null)
 
 onAuthStateChanged(auth, (user) => {
   esAdmin.value = user?.email === admin
   usuarioActual.value = user
 
   if (!user) {
-    recordatorios.value = []
-    return
-  }
+    if (cancelarLecturaRecordatorios) {
+      cancelarLecturaRecordatorios()
+      cancelarLecturaRecordatorios = null
+    }
 
-  if (user) {
-    logueado.value = true
-    nombreUsuario.value = user.displayName || user.email || 'Usuario'
-    imgUsuario.value = user.photoURL || ''
-    idUsuario.value = user.uid
-  } else {
+    recordatorios.value = []
     logueado.value = false
     nombreUsuario.value = ''
     imgUsuario.value = ''
     idUsuario.value = ''
+  } else {
+    logueado.value = true
+    nombreUsuario.value = user.displayName || user.email || 'Usuario'
+    imgUsuario.value = user.photoURL || ''
+    idUsuario.value = user.uid
+
+    if (!cancelarLecturaRecordatorios) {
+      const consulta = query(
+        coleccionRecordatorios,
+        where('usuarioId', '==', user.uid)
+      )
+
+      cancelarLecturaRecordatorios = onSnapshot(consulta, (snapshot) => {
+        recordatorios.value = snapshot.docs.map((recordatorio) => normalizarRecordatorio(recordatorio))
+        ordenarRecordatorios()
+      }, (error) => {
+        console.error('No se pudieron leer los recordatorios', error)
+      })
+    }
   }
-
-  const consulta = query(
-    coleccionRecordatorios,
-    where('usuarioId', '==', user.uid)
-  )
-
-  cancelarLecturaRecordatorios = onSnapshot(consulta, (snapshot) => {
-    recordatorios.value = snapshot.docs.map((documento) => normalizarRecordatorio(documento))
-    ordenarRecordatorios()
-  }, (error) => {
-    console.error('No se pudieron leer los recordatorios', error)
-  })
 })
 
-function normalizarRecordatorio(documento) {
-  const datos = documento.data()
+
+function normalizarRecordatorio(recordatorio) {
+  const datos = recordatorio.data()
+  const adjunto = datos.adjunto || (
+    datos.URL_archivo
+      ? {
+          nombre: datos.archivo || 'Archivo adjunto',
+          ruta: datos.rutaArchivo || '',
+          url: datos.URL_archivo
+        }
+      : null
+  )
 
   return {
-    id: documento.id,
+    id: recordatorio.id,
     texto: datos.texto || '',
     prioridad: prioridades.includes(datos.prioridad) ? datos.prioridad : 'Normal',
     creadoEn: Number(datos.creadoEn) || Date.now(),
     completado: Boolean(datos.completado),
     usuarioId: datos.usuarioId || '',
     usuarioEmail: datos.usuarioEmail || '',
+    adjunto,
     animar: false
   }
 }
@@ -110,27 +126,52 @@ function pendientes() {
   return recordatorios.value.filter((recordatorio) => !recordatorio.completado).length
 }
 
+
+function adjuntarArchivo(e) {
+  archivo.value = e.target.files[0] || null
+}
+
 async function anadirRecordatorio() {
   const textoLimpio = texto.value.trim()
 
-  if (!textoLimpio || !usuarioActual.value) {
-    return
-  }
+  if (textoLimpio && usuarioActual.value) {
+    try {
+      let adjunto = null
 
-  const nuevoRecordatorio = {
-    texto: textoLimpio,
-    prioridad: 'Normal',
-    creadoEn: Date.now(),
-    completado: false,
-    usuarioId: usuarioActual.value.uid,
-    usuarioEmail: usuarioActual.value.email || ''
-  }
+      if (archivo.value) {
+        const ruta = `${usuarioActual.value.uid}/${archivo.value.name}`
 
-  try {
-    await addDoc(coleccionRecordatorios, nuevoRecordatorio)
-    texto.value = ''
-  } catch (error) {
-    console.error('No se pudo crear el recordatorio', error)
+        const { data } = supabase.storage
+          .from('Adjuntos')
+          .getPublicUrl(ruta)
+
+        adjunto = {
+          nombre: archivo.value.name,
+          ruta,
+          url: data.publicUrl,
+          tipo: archivo.value.type || '',
+          tamano: archivo.value.size
+        }
+      }
+
+      await addDoc(coleccionRecordatorios, {
+        texto: textoLimpio,
+        prioridad: 'Normal',
+        creadoEn: Date.now(),
+        completado: false,
+        usuarioId: usuarioActual.value.uid,
+        usuarioEmail: usuarioActual.value.email || '',
+        adjunto,
+        archivo: adjunto?.nombre || '',
+        URL_archivo: adjunto?.url || '',
+        rutaArchivo: adjunto?.ruta || ''
+      })
+
+      texto.value = ''
+      limpiarArchivo()
+    } catch (error) {
+      console.error('No se pudo crear el recordatorio o subir el archivo', error)
+    }
   }
 }
 
@@ -162,6 +203,8 @@ async function cambiarEstado(id) {
 
 async function borrarRecordatorio(id) {
   try {
+    const recordatorio = buscarRecordatorio(id)
+    await borrarAdjuntoRecordatorio(recordatorio)
     await deleteDoc(doc(db, 'recordatorios', id))
   } catch (error) {
     console.error('No se pudo borrar el recordatorio', error)
@@ -173,7 +216,10 @@ async function borrarCompletados() {
 
   try {
     await Promise.all(
-      completados.map((recordatorio) => deleteDoc(doc(db, 'recordatorios', recordatorio.id)))
+      completados.map(async (recordatorio) => {
+        await borrarAdjuntoRecordatorio(recordatorio)
+        await deleteDoc(doc(db, 'recordatorios', recordatorio.id))
+      })
     )
   } catch (error) {
     console.error('No se pudieron borrar los recordatorios completados', error)
@@ -245,6 +291,36 @@ function cerrarSesion() {
 function accederAdmin(){
   router.push({ name: 'administracion' })
 }
+
+function seleccionarArchivos(event) {
+  adjuntarArchivo(event)
+}
+
+function limpiarArchivo() {
+  archivo.value = null
+
+  if (inputArchivos.value) {
+    inputArchivos.value.value = ''
+  }
+}
+
+async function borrarAdjuntoRecordatorio(recordatorio) {
+  if (recordatorio?.adjunto?.ruta) {
+    const { error } = await supabase.storage
+      .from('Adjuntos')
+      .remove([recordatorio.adjunto.ruta])
+
+    if (error) {
+      console.error('No se pudo borrar el adjunto', error)
+    }
+  }
+}
+
+onUnmounted(() => {
+  if (cancelarLecturaRecordatorios) {
+    cancelarLecturaRecordatorios()
+  }
+})
 </script>
 
 <template>
@@ -270,6 +346,12 @@ function accederAdmin(){
         placeholder="Qué quieres recordar?"
         @keyup.enter="anadirRecordatorio"
       />
+      <input
+        ref="inputArchivos"
+        class="input-archivos"
+        type="file"
+        @change="seleccionarArchivos"
+      >
 
       <div class="resumen">
         <span class="contador">
@@ -344,6 +426,18 @@ function accederAdmin(){
               </button>
               <span class="tiempo"> {{ tiempoCreacion(recordatorio.creadoEn) }}</span>
             </div>
+
+            <div v-if="recordatorio.adjunto" class="adjuntos">
+              <a
+                :href="recordatorio.adjunto.url"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="adjunto"
+              >
+                {{ recordatorio.adjunto.nombre }}
+              </a>
+            </div>
+
           </div>
 
           <button
@@ -438,6 +532,17 @@ function accederAdmin(){
 
 .input-principal::placeholder {
   color: #718096;
+}
+
+.input-archivos {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 12px;
+  border: 1px dashed #334155;
+  border-radius: 7px;
+  padding: 12px;
+  background: #172033;
+  color: #dbeafe;
 }
 
 .resumen {
@@ -594,6 +699,32 @@ function accederAdmin(){
 
 .tiempo {
   margin-left: 10px;
+}
+
+.adjuntos {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.adjunto {
+  display: inline-flex;
+  max-width: 100%;
+  overflow: hidden;
+  border-radius: 6px;
+  padding: 6px 10px;
+  background: #25324b;
+  color: #bfdbfe;
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.adjunto:hover {
+  background: #334155;
 }
 
 .borrar {
