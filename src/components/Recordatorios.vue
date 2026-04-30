@@ -141,6 +141,18 @@ async function anadirRecordatorio() {
       if (archivo.value) {
         const ruta = `${usuarioActual.value.uid}/${archivo.value.name}`
 
+        const { error } = await supabase.storage
+          .from('Adjuntos')
+          .upload(ruta, archivo.value, {
+            cacheControl: '3600',
+            contentType: archivo.value.type || 'application/octet-stream',
+            upsert: false
+          })
+
+        if (error) {
+          throw error
+        }
+
         const { data } = supabase.storage
           .from('Adjuntos')
           .getPublicUrl(ruta)
